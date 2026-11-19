@@ -1,0 +1,809 @@
+// trigger — доменная модель (Prisma + SQLite)
+// Все UUID — строковые (SQLite), JSONB — строка с JSON.
+// tenant_id — задел под мультитенантность, заполняется константой из env TENANT_ID.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Безопасность ----------
+
+model User {
+  id                 String    @id @default(uuid())
+  email              String    @unique
+  name               String?
+  passwordHash       String    // bcrypt, cost 12
+  role               String    @default("VIEWER") // ADMIN | MANAGER | VIEWER
+  isActive           Boolean   @default(true)
+  failedLoginCount   Int       @default(0)
+  lockedUntil        DateTime?
+  mustChangePassword Boolean   @default(false)
+  tenantId           String    @default("trigger")
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  sessions         Session[]
+  passwordHistory  PasswordHistory[]
+}
+
+model Session {
+  idHash    String   @id // sha256(raw-токена из cookie)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  ip        String?
+  userAgent String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// История паролей (анти-повтор при смене/сбросе): bcrypt-хеши последних
+// PASSWORD_HISTORY_DEPTH паролей. Запись при каждой смене; проверка — новый
+// пароль не должен совпадать с текущим и историей. Утечка БД не раскрывает
+// пароли (хеши те же bcrypt cost 12).
+model PasswordHistory {
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  passwordHash String // bcrypt
+  createdAt    DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  userEmail  String?
+  action     String // LOGIN | LOGIN_FAILED | LOGOUT | CREATE | UPDATE | DELETE | ACTIVATE | DEACTIVATE | REVOKE | CANCEL | IMPORT | UNSUBSCRIBE | EXPORT
+  entityType String // USER | CLIENT | TEMPLATE | FUNNEL | INSTANCE | API_KEY | SETTINGS | SMS
+  entityId   String?
+  details    String? // JSON-строка, без секретов
+  ip         String?
+  tenantId   String   @default("trigger")
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+model ApiKey {
+  id          String    @id @default(uuid())
+  name        String
+  keyHash     String    @unique // sha256(raw-ключа)
+  prefix      String // первые 10 символов raw-ключа для узнавания в UI
+  ipAllowlist String? // CSV: "10.0.0.1,10.0.0.0/24"; null/пусто — без ограничений
+  // Повышенный лимит запросов/мин для интеграционного ключа (null — общий лимит
+  // приёма событий, env EVENTS_KEY_RATE_LIMIT_PER_MIN, по умолчанию 120).
+  // Боевой адаптер системы данных (events + events/batch) получает отдельный ключ с
+  // повышенным лимитом; обычные ключи — без поля.
+  rateLimitPerMin Int?
+  isActive    Boolean   @default(true)
+  lastUsedAt  DateTime?
+  revokedAt   DateTime?
+  createdById String?
+  tenantId    String   @default("trigger")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+// Счётчики rate-limiter на БД (интерфейс RateLimiter, реализация — БД; Redis позже)
+model RateLimitEntry {
+  key         String   @id // например "login:ip:1.2.3.4"
+  windowStart DateTime
+  count       Int      @default(0)
+}
+
+// ---------- Контакты ----------
+
+model Client {
+  id               String    @id @default(uuid())
+  externalId       String    @unique // ID клиента в системе данных
+  phone            String // E.164: +7XXXXXXXXXX
+  timezone         String    @default("Asia/Novosibirsk")
+  data             String    @default("{}") // JSON: name, loan_amount, ...
+  smsConsentStatus String    @default("NONE") // NONE | PENDING | GRANTED | REVOKED
+  smsConsentSource String?
+  smsConsentAt     DateTime?
+  unsubscribedAt   DateTime?
+
+  // ---------- Карточка клиента (имена API 1:1) ----------
+  firstName        String? // client_first_name
+  lastName         String? // client_last_name
+  middleName       String? // client_middle_name
+  email            String? // email
+  applicationId    Int? // application_id — id последней заявки
+  applicationStatus    Int? // application_actual_status — текущий статус заявки
+  applicationPrevStatus Int? // application_previous_status
+  agreementId      Int? // agreement_id — id последнего договора
+  agreementStatus  Int? // agreement_actual_status: 16=действующий, 17=пролонгирован, 19=закрыт
+  agreementPrevStatus Int? // agreement_previous_status
+  loanAmount       Float? // loan_amount
+  loanPeriod       Int? // loan_period — срок займа в днях
+  loanClosedAt     DateTime? // loan_closed_date — дата закрытия последнего займа (доработка системы данных, окт. 2026)
+  // Разрешение на МАРКЕТИНГОВЫЕ SMS (аналог person_exclude). ХРАНЕНИЕ БЕЗ комплаенс-эффекта.
+  notificationActive  Boolean   @default(true) // notification_active
+  offerDateStart   DateTime? // person_offer_date_start
+  offerDateExpired DateTime? // person_offer_date_expired
+  offerApproveMoney Float? // person_offer_approve_money
+  offerApproveDays Int? // person_offer_approve_days
+  offerAvailable   Boolean? // person_offer_available
+  birthday         DateTime? // person_birthday
+  lastProductType  String? // last_product_type: 'PDL' | 'IL'
+  agreementsLastYear  Int? // agreements_for_lastyear — закрытых договоров за год
+  agreementsLifetime  Int? // agreements_for_lifetime — закрытых договоров за всё время
+  banDays          Int? // ban_days — дни запрета повторной заявки
+  profileUpdatedAt DateTime? // date_update — дата формирования данных в ядре
+
+  tenantId         String    @default("trigger")
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  instances WorkflowInstance[]
+  messages  SmsMessage[]
+  segmentMembers SegmentMember[]
+  customFieldValues ClientFieldValue[]
+  profileChanges ProfileChangeLog[]
+  // Календарь дней рождения (1:1, есть только при заполненном birthday) —
+  // SQL-путь сегментов «ДР в ближайшие N дней» (Task 63)
+  birthdayCalendar BirthdayCalendar?
+
+  // createdAt — сортировка списка «Клиенты» (ORDER BY createdAt DESC + OFFSET):
+  // без индекса SQLite сканирует и сортирует всю таблицу (на 4 млн строк — секунды)
+  @@index([createdAt])
+  @@index([phone])
+  @@index([smsConsentStatus])
+  // Задел под будущие сегменты
+  @@index([agreementStatus])
+  @@index([applicationStatus])
+  @@index([lastProductType])
+  @@index([notificationActive])
+  @@index([birthday])
+  @@index([offerDateExpired])
+  @@index([loanClosedAt])
+}
+
+// ---------- Контент ----------
+
+// Календарь дней рождения (Task 63): строка на каждого клиента с заполненным
+// birthday; monthDay = (месяц+1)*100 + день по UTC-компонентам birthday
+// (101..1231; 29.02 нормализуется в 0103 = 1 марта — та же семантика, что у
+// nextBirthdayOccurrence в segments.ts: Date.UTC(y,1,29) в невисокосном году
+// скатывается на 1 марта). Индекс monthDay превращает сегменты «ДР в ближайшие
+// N дней» и ДР-рассылки из JS-курсора по всей таблице Client (~2 мин на 4 млн
+// строк, нагрузочный тест Task 62 §8.4) в SQL-запрос за миллисекунды.
+// Синхронизация: точки записи карточки + самовосстановление в тике воркера
+// (сверка счётчиков раз в час, services/birthday-calendar.ts).
+model BirthdayCalendar {
+  id        String   @id @default(uuid())
+  monthDay  Int // 101..1231 — месяц/день рождения без года
+  clientId  String   @unique
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  tenantId  String   @default("trigger")
+
+  @@index([monthDay])
+}
+
+model SmsTemplate {
+  id          String   @id @default(uuid())
+  name        String
+  body        String // переменные {{var}} + фильтры |default/…, блоки {{#if}}/{{#variant}}/{{#cancel}}
+  isMarketing Boolean  @default(false)
+  version     Int      @default(1)
+  isActive    Boolean  @default(true) // soft-delete
+  // ---------- Настройки шаблона ----------
+  description String? // произвольное пояснение для маркетологов
+  senderName  String? // имя отправителя SMS (до 11 лат. символов); пусто — дефолт из настроек
+  maxSegments Int      @default(0) // лимит частей SMS; 0 = без лимита; превышение → SMS не отправляется (SMS_TOO_LONG)
+  tenantId    String   @default("trigger")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Funnel {
+  id            String   @id @default(uuid())
+  name          String
+  triggerEvent  String // одно из TRIGGER_EVENTS (engine/types.ts): 5 сервисных + 13 событий интеграции с системой данных (статусы 5/6/7/9/10/21/710/711/9309/13/17/19/20 — реестр engine/types.ts)
+  isActive      Boolean  @default(false)
+  version       Int      @default(1)
+  definition    String // JSON: {start_node, nodes[]}
+  // Режим повторного входа при новом событии для клиента с экземпляром этой воронки:
+  // SKIP — уже проходил (любой статус) → пропустить; SKIP_ACTIVE — пропустить, пока выполняется;
+  // REPLACE — отменить активный и запустить заново; PARALLEL — параллельный запуск.
+  entryMode     String   @default("SKIP_ACTIVE") // SKIP | SKIP_ACTIVE | REPLACE | PARALLEL
+  description   String?
+  tenantId      String   @default("trigger")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  instances WorkflowInstance[]
+
+  @@index([triggerEvent, isActive])
+}
+
+// ---------- Сегменты ----------
+// Условия — JSON под именами полей карточки: {match:"all"|"any", rules:[{field, op, value}]}.
+// Два режима (аналог Mailchimp «saved search» vs «static segment»):
+//   • dynamic (по умолчанию) — членство НЕ материализуется: вычисляется на лету
+//     (превью/клиенты/счёт/рассылки). Число меняется вместе с базой.
+//   • static — «фиксированный срез»: кнопка «Зафиксировать» материализует текущий
+//     состав в SegmentMember; счёт/рассылки идут по срезу, пока его не обновят.
+// frozenCount/frozenAt — метка среза на момент фиксации (живой размер среза —
+// COUNT(SegmentMember), может отличаться, если клиентов позже удалили).
+model Segment {
+  id           String    @id @default(uuid())
+  name         String
+  description  String?
+  conditions   String // JSON: {match, rules[]}
+  mode         String    @default("dynamic") // dynamic | static
+  frozenCount  Int?
+  frozenAt     DateTime?
+  tenantId     String    @default("trigger")
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  members SegmentMember[]
+
+  @@index([name])
+}
+
+// Члены фиксированного среза сегмента (только для mode=static).
+// Удаление клиента каскадно убирает строку — срез не «размывается» битыми ссылками.
+model SegmentMember {
+  id        String   @id @default(uuid())
+  segmentId String
+  segment   Segment  @relation(fields: [segmentId], references: [id], onDelete: Cascade)
+  clientId  String
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  frozenAt  DateTime @default(now())
+  tenantId  String   @default("trigger")
+
+  @@unique([segmentId, clientId])
+  @@index([segmentId])
+}
+
+// ---------- Рассылки по сегментам ----------
+// Рассылка = сегмент + маркетинговый шаблон + расписание.
+// Время расписания трактуется по МЕСТНОМУ часовому поясу каждого клиента
+// (воркер срабатывает в самом раннем поясе РФ — Europe/Kaliningrad — и ставит
+// сообщения в очередь до местного времени клиента). Тихие часы сдвигают отправку
+// на конец окна. Комплаенс проверяется в момент фактической отправки.
+model Broadcast {
+  id             String    @id @default(uuid())
+  name           String
+  description    String?
+  segmentId      String
+  templateId     String
+  // Origin запроса создания рассылки из панели — база ссылки отписки в SMS
+  // (тот же принцип, что EventsInbox.baseUrl): публичный адрес панели,
+  // с которого владелец создал рассылку. null/пусто → фолбэк настроек/env.
+  baseUrl        String?
+  kind           String    @default("ONCE") // ONCE | RECURRING
+  runAt          DateTime? // ONCE: момент запуска (UTC); null → сразу при создании
+  weekday        Int? // RECURRING: 1=Пн .. 7=Вс (местное время клиента)
+  hour           Int? // RECURRING: час 0..23
+  minute         Int       @default(0)
+  minDaysBetween Int       @default(7) // «не чаще 1 раза в N дней» клиенту (в рамках рассылки)
+  maxRecipients  Int       @default(1000) // порционный лимит получателей на запуск
+  status         String    @default("ACTIVE") // ACTIVE | PAUSED | DONE | CANCELLED
+  nextRunAt      DateTime?
+  lastRunAt      DateTime?
+  tenantId       String    @default("trigger")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  runs BroadcastRun[]
+
+  @@index([status, nextRunAt])
+  @@index([segmentId])
+}
+
+// Один запуск рассылки: создание очереди сообщений (быстрая фаза).
+// Доставка отслеживается по sms_messages.run_id; статистика считается на лету.
+model BroadcastRun {
+  id           String    @id @default(uuid())
+  broadcastId  String
+  broadcast    Broadcast @relation(fields: [broadcastId], references: [id], onDelete: Cascade)
+  status       String    @default("RUNNING") // RUNNING | DONE | FAILED
+  planned      Int       @default(0) // подходящих по сегменту клиентов
+  recipients   Int       @default(0) // создано сообщений (после пропусков и лимита)
+  skippedGuard Int       @default(0) // пропущено по «не чаще 1 раза в N дней»
+  cappedBy     Int       @default(0) // отброшено порционным лимитом
+  error        String?
+  startedAt    DateTime  @default(now())
+  finishedAt   DateTime?
+  tenantId     String    @default("trigger")
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([broadcastId, startedAt])
+}
+
+// ---------- Движок ----------
+
+model EventsInbox {
+  id             String   @id @default(uuid())
+  event          String
+  externalId     String
+  payload        String? // JSON
+  // «Радар» доработок системы данных: поля client_card, которых нет в схеме карточки
+  // (registry/card-fields) — JSON-массив имён; null — все ключи известны.
+  // Заполняется при приёме события по СЫРОМУ объекту (zod отбрасывает
+  // неизвестные ключи — без этого новые поля источника терялись бы молча).
+  unknownFields  String?
+  idempotencyKey String   @unique
+  status         String   @default("NEW") // NEW | PROCESSED | FAILED | DUPLICATE
+  result         String? // JSON-итог обработки: созданные экземпляры/причины пропуска
+  error          String?
+  apiKeyId       String?
+  source         String   @default("API") // API | PANEL (dev-ручная отправка)
+  ip             String?
+  baseUrl        String? // Origin входящего запроса — для ссылки отписки в SMS
+  // skip_triggers (батч-приём/импорт): true → воркер обновляет карточку клиента,
+  // но НЕ запускает воронки и не будит waitEvent-экземпляры (семантика
+  // profiles/import legacy-платформы: «только upsert профиля»). Инкрементальные
+  // события со skip_triggers=false запускают воронки как обычно.
+  skipTriggers   Boolean  @default(false)
+  tenantId       String   @default("trigger")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([status])
+  @@index([event])
+  @@index([externalId])
+}
+
+// ---------- «Радар» неизвестных полей client_card ----------
+// Агрегат наблюдений: система данных передала в client_card поле, которого нет
+// в схеме карточки (registry/card-fields). Пишется приёмником событий при
+// приёме (ingest); EventsInbox.unknownFields — детали по конкретному событию,
+// здесь — сводка (первое/последнее упоминание + счётчик) для UI без сканирования
+// журнала. Удаление строки из панели — «убрать из сводки» (после подключения
+// поля в реестр или решения игнорировать): пока поле не в реестре, новое
+// наблюдение воссоздаст строку — радар не молчит.
+model UnknownFieldObservation {
+  id            String   @id @default(uuid())
+  fieldName       String   @unique
+  count         Int      @default(0)
+  firstSeenAt   DateTime @default(now())
+  lastSeenAt    DateTime @default(now())
+  lastEventId   String?
+  lastEventName String? // тип события, в котором поле встретилось в последний раз
+  tenantId      String   @default("trigger")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([lastSeenAt])
+}
+
+// ---------- Кастомные поля профилей (Lite) ----------
+// Реестр полей, которые компания заводит САМА (не дорабатывая систему данных), + значения
+// клиентов в отдельной EAV-lite-таблице с типизированными колонками и индексами.
+//
+// Пространство имён: ключ поля без префикса (is_credit_line); во ВСЕХ внешних
+// контекстах значение живёт под именем с префиксом cf_:
+//   • переменные шаблонов/воронок/рассылок — {{cf_is_credit_line}};
+//   • правила сегментов — field: "cf_is_credit_line";
+//   • ключи client_card события — "cf_is_credit_line" (каноничное написание),
+//     сырой ключ "is_credit_line" или camelCase контракта системы данных
+//     "isCreditLine" (применяется, пока не занят реестром карточки).
+// Префикс cf_ гарантирует отсутствие коллизий с полями карточки и легаси payload.
+//
+// Управление реестром — только ADMIN (раздел «Кастомные поля»); удаление НЕ
+// поддерживается — деактивация (isActive=false): поле исчезает из конструкторов
+// сегментов/подсказок и перестаёт приниматься из client_card, но сохранённые
+// значения НЕ удаляются (живые шаблоны продолжают подставлять переменную —
+// выключение поля не ломает уже собранные SMS). Реактивация возвращает всё.
+model CustomField {
+  id          String   @id @default(uuid())
+  key         String   @unique // [a-z][a-z0-9_]{1,39}; переменная = cf_<key>
+  label       String // человекочитаемое имя (UI, подсказки)
+  type        String   @default("text") // text | number | date | bool
+  description String? // пояснение для операторов
+  isActive    Boolean  @default(true) // деактивация вместо удаления
+  createdById String? // id пользователя-автора (история)
+  tenantId    String   @default("trigger")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  values ClientFieldValue[]
+
+  @@index([isActive])
+}
+
+// Значение кастомного поля клиента (EAV-lite): одна строка на пару
+// (поле, клиент) — @@unique; хранение типизировано по колонкам под тип поля
+// (text→valueStr, number→valueNum, date→valueDate, bool→valueBool), остальные
+// колонки NULL. Сегментация идёт SQL-подзапросами EXISTS по индексам
+// (fieldId, value*) — JS-фильтрация 4 млн строк исключена.
+// Каскады: удаление поля/клиента убирает значения (история значений — P5).
+model ClientFieldValue {
+  id        String      @id @default(uuid())
+  fieldId   String
+  field     CustomField @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+  clientId  String
+  client    Client      @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  valueStr  String?
+  valueNum  Float?
+  valueDate DateTime?
+  valueBool Boolean?
+  tenantId  String      @default("trigger")
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  @@unique([fieldId, clientId])
+  @@index([clientId])
+  @@index([fieldId, valueNum])
+  @@index([fieldId, valueStr])
+  @@index([fieldId, valueDate])
+  @@index([fieldId, valueBool])
+}
+
+model WorkflowInstance {
+  id             String   @id @default(uuid())
+  funnelId       String
+  funnel         Funnel   @relation(fields: [funnelId], references: [id])
+  funnelVersion  Int
+  funnelName     String // снапшот на момент запуска
+  clientId       String
+  client         Client   @relation(fields: [clientId], references: [id])
+  currentNodeId  String?
+  status         String   @default("RUNNING") // RUNNING | WAITING | COMPLETED | FAILED | CANCELLED
+  context        String   @default("{}") // JSON: event, payload, vars
+  error          String?
+  eventId        String?
+  idempotencyKey String?
+  tenantId       String   @default("trigger")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  jobs    ScheduledJob[]
+  events  InstanceEvent[]
+  messages SmsMessage[]
+
+  // createdAt — список «Экземпляры» (ORDER BY createdAt DESC) и окна статистики
+  @@index([status])
+  @@index([clientId])
+  @@index([funnelId])
+  @@index([createdAt])
+}
+
+// Источник правды для ВСЕХ задержек. Переживает рестарт, несколько инстансов — ок.
+model ScheduledJob {
+  id          String    @id @default(uuid())
+  instanceId  String
+  instance    WorkflowInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+  nodeId      String // узел, с которого продолжить исполнение
+  reason      String    @default("NODE_DELAY") // NODE_DELAY | QUIET_HOURS | RETRY | WAIT_EVENT
+  runAt       DateTime
+  status      String    @default("PENDING") // PENDING | RUNNING | DONE | FAILED | CANCELLED
+  attempts    Int       @default(0)
+  lockedBy    String?
+  lockedUntil DateTime?
+  tenantId    String    @default("trigger")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([runAt, status])
+  @@index([instanceId])
+  @@index([instanceId, reason])
+}
+
+// reason WAIT_EVENT — таймаут узла «ждать событие»; nodeId = id waitEvent-узла
+// (при срабатывании воркер берёт его ветку onTimeout; пробуждение по событию — из inbox).
+
+// Таймлайн исполнения экземпляра: переходы статусов, старт/финиш нод, SMS
+model InstanceEvent {
+  id         String   @id @default(uuid())
+  instanceId String
+  instance   WorkflowInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+  type       String // NODE_START | NODE_DONE | STATUS_CHANGE | SMS_QUEUED | SMS_SENT | SMS_REJECTED | SMS_FAILED | ERROR | INFO
+  nodeId     String?
+  nodeType   String?
+  message    String?
+  payload    String? // JSON
+  createdAt  DateTime @default(now())
+  tenantId   String   @default("trigger")
+
+  @@index([instanceId, createdAt])
+}
+
+// ---------- История изменений профиля (P5) ----------
+// Append-only журнал «кто/когда/что изменил в карточке клиента»: одна строка —
+// одно изменение ОДНОГО поля (дифф «было → стало»). Пишется всеми источниками
+// изменения профиля (services/profile-history): ручная правка панели (MANUAL),
+// CSV-импорт (IMPORT), события системы данных из client_card (EVENT), массовое обновление
+// (MASS_UPDATE). Значения — строковые представления (даты ISO, булевы true/false,
+// null = «пусто»); чтение — секция карточки клиента (GET /clients/{id}/history).
+// Спец-поле __created__ — «профиль создан» (создание фиксируется одной строкой).
+// Чистка: воркер удаляет записи старше PROFILE_HISTORY_RETENTION_DAYS (180).
+model ProfileChangeLog {
+  id            String   @id @default(uuid())
+  clientId      String
+  client        Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  // Имя поля карточки (client_first_name) | cf_<key> кастомного поля |
+  // спец-ключи: __created__ (профиль создан), phone, timezone, sms_consent_status
+  field         String
+  oldValue      String? // строковое представление прежнего значения; NULL = «пусто»
+  newValue      String? // строковое представление нового значения; NULL = «пусто»
+  // Источник изменения — ручная правка / импорт CSV / событие источника / массовая операция
+  source        String // MANUAL | IMPORT | EVENT | MASS_UPDATE
+  // JSON-контекст: {actorEmail} | {line} | {eventId, event} | {jobId, jobName} — «почему»
+  sourceDetails String?
+  tenantId      String   @default("trigger")
+  createdAt     DateTime @default(now())
+
+  // Карточка клиента читает срез по (clientId, createdAt DESC) — покрывающий индекс
+  @@index([clientId, createdAt])
+  // Ретеншн-чистка воркера сканирует по дате
+  @@index([createdAt])
+}
+
+// ---------- Массовое обновление клиентов (P4) ----------
+// Фоновая операция «проставить поля сегменту»: оператор выбирает сегмент +
+// значения полей (кастомные поля профиля, «реклама разрешена», статус SMS-согласия)
+// — воркер применяет их потоковой итерацией сегмента порциями, каждое фактическое
+// изменение фиксируется в истории профиля (ProfileChangeLog, source=MASS_UPDATE).
+// Поля карточки (суммы/статусы/даты) НЕ поддерживаются сознательно: их
+// перезапишет ближайшее событие client_card — массовая правка бессмысленна.
+// updates: JSON [{field: "cf_is_credit_line"|"notification_active"|"sms_consent_status",
+// value: string|number|boolean|null}] — null означает «очистить значение».
+// maxAffected — предохранитель: применить не более N изменений (кап запуска).
+model MassUpdateJob {
+  id             String    @id @default(uuid())
+  name           String    // название операции (для журнала/аудита)
+  segmentId      String
+  segmentName    String // снапшот имени сегмента на момент запуска (переживает удаление сегмента)
+  updates        String // JSON: [{field, value}]
+  maxAffected    Int       @default(10000) // предохранитель: максимум изменений за запуск
+  status         String    @default("PENDING") // PENDING | RUNNING | DONE | FAILED | CANCELLED
+  planned        Int       @default(0) // клиентов в сегменте на момент запуска (для прогресса)
+  processed      Int       @default(0) // просмотрено клиентов сегмента
+  affected       Int       @default(0) // реально изменено (после диффа «уже равно»)
+  error          String?
+  createdById    String?
+  createdByEmail String? // снапшот email оператора (переживает удаление пользователя)
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  tenantId       String    @default("trigger")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+// ---------- Лог SMS ----------
+
+model SmsMessage {
+  id                String    @id @default(uuid())
+  instanceId        String?
+  instance          WorkflowInstance? @relation(fields: [instanceId], references: [id])
+  clientId          String?
+  client            Client?   @relation(fields: [clientId], references: [id])
+  phone             String
+  body              String // итоговый текст, включая дисклеймер
+  segments          Int       @default(1)
+  provider          String // sandbox | smstech | t2 | mts
+  providerMessageId String?
+  // Версия записи у провайдера — дедупликация webhook-уведомлений (SMS.Tech)
+  // по паре code+version (раздел 10.4 документации: старые версии игнорируются)
+  providerVersion   Int?
+  // Тарификация шлюза — priceMoney.units (копейки строкой → Int) и оператор
+  priceKopecks      Int?
+  operatorCode      String?
+  templateId        String?
+  templateName      String?
+  status            String    @default("QUEUED") // QUEUED | SENDING (claim) | SENT | DELIVERED | FAILED | REJECTED_BY_COMPLIANCE | CANCELLED
+  rejectReason      String? // INVALID_PHONE | UNSUBSCRIBED | ADVERT_OFF | NO_CONSENT | LIMIT_CLIENT | LIMIT_SYSTEM | RENDER_ERROR | SMS_TOO_LONG | TEMPLATE_CANCEL
+  error             String?
+  // Снимок переменных сообщения (P6): JSON {имя: значение|null} — только
+  // переменные, реально использованные шаблоном ({{var}} в теле, включая
+  // условия/варианты), со значениями на МОМЕНТ рендера. Отвечает на вопрос
+  // «что именно подставилось в это SMS» — отладка шаблонов и разбор жалоб
+  // без восстановления состояния профиля на дату отправки. Значения свыше
+  // 200 симв. усекаются (мегабайтные payload-переменные не раздувают лог).
+  varsSnapshot      String?
+  sentAt            DateTime?
+  deliveredAt       DateTime?
+  attempts          Int       @default(0) // ретраи TemporaryProviderError в отправке рассылок
+  // Рассылки: сообщение принадлежит запуску; scheduledFor — отложенная отправка
+  broadcastId       String?
+  broadcastName     String? // имя рассылки на момент создания (история переживает удаление рассылки)
+  runId             String?
+  scheduledFor      DateTime?
+  tenantId          String    @default("trigger")
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  // createdAt-префикс — диапазонные запросы лога/статистики; status+templateName
+  // в теле индекса — ПОКРЫВАЮЩИЙ для агрегаций дашборда (GROUP BY день/статус
+  // и шаблон/статус считаются чистым сканом индекса, без выборки 500 тыс. строк)
+  @@index([createdAt, status, templateName])
+  @@index([clientId, createdAt])
+  @@index([status])
+  @@index([phone])
+  @@index([providerMessageId])
+  @@index([broadcastId])
+  @@index([runId])
+  @@index([status, scheduledFor])
+}
+
+model UnsubscribeList {
+  id        String   @id @default(uuid())
+  phone     String   @unique
+  source    String   @default("LINK") // LINK | MANUAL | IMPORT | HOOK
+  clientId  String?
+  tenantId  String   @default("trigger")
+  createdAt DateTime @default(now())
+}
+
+// ---------- Захват событий доставки ----------
+// Append-only журнал «кому какие СМС отправили и что с ними стало»: каждое событие
+// (send/deliv/undeliv/click/unsub) — отдельная строка с сырым payload источника.
+// Источники (source): panel — наблюдение движка/панели при отправке; smstech/t2/mts —
+// webhook-уведомления шлюзов; external — внешний захват (POST /api/v1/hooks/events,
+// JSON-батч). dedupKey @unique — идемпотентность против ретраев отправителей
+// (например, 4 повторные попытки у отправителя).
+// Тумблер AppSettings.hooksEnabled: выключен → приёмник отвечает OK, не записывая,
+// webhook-и не журналируют, реконсиляция воркера не выполняется.
+//
+// Обратный поток (форвардер): события наших РЕАЛЬНЫХ отправок
+// (source panel/mts/t2/smstech, провайдер ≠ sandbox, типы send/deliv/undel_sms)
+// батчатся и POST-ятся на endpoint приёмника событий в формате обмена событиями.
+// Колонки ниже — очередь доставки at-least-once: forwardedAt=null → в очереди;
+// nextForwardAt — спящий ретрай (15с ×4, далее 5м/15м/1ч); forwardSkip — исключено
+// (события, накопившиеся ДО включения форвардера, не летят в BI задним числом;
+// аналогично sandbox-отправки не попадают в боевой BI).
+model MessageEvent {
+  id           String    @id @default(uuid())
+  source       String // panel | smstech | t2 | mts | external
+  eventType    String // send_sms | deliv_sms | undeliv_sms | click_sms | uclick_sms | unsub_sms | update
+  eventDate    DateTime // дата события из payload (fallback — момент приёма)
+  receivedAt   DateTime @default(now())
+  phone        String?
+  provider     String? // канал сообщения (sandbox | smstech | t2 | mts), если известен
+  smsMessageId String? // связка с нашей строкой SMS (null — внешнее событие)
+  clientId     String? // клиент по телефону (для аналитики внешних событий)
+  externalIds  String? // JSON: message_id, campaign_id, launch_id, full_message_id…
+  payload      String // сырой JSON события целиком
+  dedupKey     String    @unique
+  status       String    @default("PROCESSED") // PROCESSED | IGNORED | ERROR
+  result       String? // JSON-итог обработки: применённый статус, отписка и т.п.
+  // ---------- очередь обратного потока (форвардер) ----------
+  forwardedAt  DateTime? // время успешной доставки в приёмник событий; null — в очереди/не подлежит
+  forwardAttempts Int    @default(0) // попытки доставки (для бэкоффа и статистики)
+  forwardError String? // последняя ошибка доставки (текст «код: причина»)
+  nextForwardAt DateTime? // когда повторить (null при forwardedAt; спящие ретраи)
+  forwardSkip  Boolean   @default(false) // исключено из очереди (накоплено до включения)
+  tenantId     String    @default("trigger")
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([receivedAt])
+  @@index([eventType, eventDate])
+  @@index([phone])
+  @@index([smsMessageId])
+  @@index([clientId])
+  // Очередь форвардера: pending-строки (forwardedAt IS NULL) по времени повтора
+  @@index([forwardedAt, nextForwardAt])
+}
+
+// ---------- Короткие ссылки ----------
+// Персональная короткая ссылка отписки: код 7 симв. (алфавит без похожих
+// глифов 0/O/1/l/I) → полный HMAC-токен. Ссылка в SMS: {base}/?u={code}
+// вместо {base}/?unsub=<~86 симв. токена> — экономия ~80 символов (~1 часть
+// SMS при ~500 тыс. отправок/мес). visits — счётчик переходов (редирект-лог).
+// Протухшие ссылки чистятся воркером через 30 дней после expiresAt.
+// Именные ссылки (kind=LINK) для маркетинга:
+// название + целевой URL с UTM; ссылка в SMS: {base}/r?c={code}; каждый
+// переход — строка в ShortLinkVisit (история по дням для дашборда).
+model ShortLink {
+  id          String    @id @default(uuid())
+  code        String    @unique
+  kind        String    @default("UNSUBSCRIBE") // UNSUBSCRIBE | LINK
+  token       String? // HMAC-токен отписки (kind=UNSUBSCRIBE)
+  name        String? // название ссылки (kind=LINK)
+  targetUrl   String? // целевой URL с UTM-метками (kind=LINK)
+  clientId    String?
+  visits      Int       @default(0)
+  lastVisitAt DateTime?
+  expiresAt   DateTime? // kind=UNSUBSCRIBE: expMs токена; kind=LINK: null = бессрочная
+  tenantId    String    @default("trigger")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  linkVisits  ShortLinkVisit[]
+
+  @@index([expiresAt])
+  @@index([clientId])
+  @@index([kind])
+}
+
+// Редирект-лог: каждый переход по короткой ссылке —
+// строка с датой. Даёт переходы по дням (дашборд/CTR за период) и не теряется
+// при удалении протухшей ссылки (каскад — при сознательном удалении ссылки).
+model ShortLinkVisit {
+  id        String   @id @default(uuid())
+  linkId    String
+  link      ShortLink @relation(fields: [linkId], references: [id], onDelete: Cascade)
+  kind      String // UNSUBSCRIBE | LINK — какой тип ссылки кликнули
+  tenantId  String   @default("trigger")
+  createdAt DateTime @default(now())
+
+  @@index([linkId, createdAt])
+  // createdAt-префикс + kind — диапазонные выборки и покрывающая агрегация
+  // переходов по дням/типам для дашборда (без выборки строк)
+  @@index([createdAt, kind])
+}
+
+// ---------- Настройки (singleton-строка id="app") ----------
+
+model AppSettings {
+  id                 String   @id @default("app")
+  advertiserName     String   @default("ДемоКомпания")
+  quietHoursStart    Int      @default(21)
+  quietHoursEnd      Int      @default(9)
+  dailyClientLimit   Int      @default(3)
+  systemDailyLimit   Int      @default(5000)
+  provider           String   @default("sandbox") // sandbox | smstech | t2 | mts
+  unsubscribeBaseUrl String   @default("") // пусто = строить от Origin запроса
+  defaultTimezone    String   @default("Asia/Novosibirsk")
+  defaultSenderName  String   @default("DemoBrand") // имя отправителя, если не задано в шаблоне/узле; у SMS.Tech зарегистрировано «DemoBrand»
+  // Токен доступа SMS.Tech, сохраняемый из панели (поле «Токен доступа»);
+  // пусто = токен не задан (fallback на env SMSTECH_ACCESS_TOKEN). В API не отдаётся.
+  smstechToken       String   @default("")
+  // Креды подключения Т2 «Бизнес SMS» (логин/пароль HTTP-рассылки из ЛК bsms.t2.ru),
+  // сохраняемые из панели (поля «Логин/Пароль Т2»); пусто = не заданы (fallback env
+  // T2_LOGIN/T2_PASSWORD). В API не отдаются.
+  t2Login            String   @default("")
+  t2Password         String   @default("")
+  // Креды подключения МТС OmniChannel (system_id/пароль из договора, Basic Auth),
+  // сохраняемые из панели (поля «Логин/Пароль МТС»); пусто = не заданы (fallback env
+  // MTS_LOGIN/MTS_PASSWORD). В API не отдаются.
+  mtsLogin           String   @default("")
+  mtsPassword        String   @default("")
+  // Короткие ссылки отписки (true → в SMS {base}/?u={код 7 симв.})
+  useShortLinks      Boolean  @default(true)
+  // Шаблон приписки; пусто = «Реклама. {advertiser}. Отказаться: {link}»
+  marketingDisclaimer String   @default("")
+  // Авто-архивация — сколько дней хранить обработанные события inbox
+  // и завершённые задачи scheduled_jobs (0 = не удалять; FAILED-события не трогаются)
+  inboxRetentionDays Int      @default(30)
+  // Ретеншн журнала MessageEvent (Task 63): сколько дней держать события
+  // доставки в БД (0 = не удалять). При 6 млн SMS/мес журнал растёт на ~3 ГБ/мес —
+  // окно 6–12 мес обязательно для боевого контура (loadtest-report §8.2).
+  // Удаляемые строки перед удалением выгружаются в gz-архив рядом с БД
+  // (db/message-events-archive/, JSONL); недоставленные в приёмник событий
+  // при включённом форвардере не удаляются. Воркер, раз в 5 мин, батчами.
+  messageEventRetentionDays Int @default(0)
+  // «Захват событий»: тумблер всей истории событий доставки. Выключен →
+  // приёмник /api/v1/hooks/events отвечает OK без записи, webhook-и шлюзов не
+  // журналируют, реконсиляция воркера не выполняется (статусы SMS-лога живут
+  // как раньше — это независимый от тумблера существующий функционал).
+  hooksEnabled        Boolean  @default(true)
+  // Токен приёмника: /api/v1/hooks/events?token=<значение>. Пусто → приёмник
+  // закрыт (401) до генерации из карточки «Захват событий» в «Интеграциях».
+  hooksToken          String   @default("")
+  // ---------- Обратный поток событий ----------
+  // Форвардер журнала MessageEvent в приёмник событий (формат обмена событиями,
+  // батчи, Bearer-токен). Включение помечает уже накопленные события
+  // forwardSkip=true — в BI летят только события с момента включения.
+  // Токен шифруется AES-256-GCM (enc:v1:), в API отдаётся только факт наличия.
+  forwarderEnabled    Boolean  @default(false)
+  forwarderUrl        String   @default("") // endpoint приёмника событий (https://…/v1/…)
+  forwarderToken      String   @default("") // Bearer-токен приёмника (enc:v1:)
+  forwarderBatchSize  Int      @default(500) // событий в одном батче (10..2000)
+  tenantId           String   @default("trigger")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
