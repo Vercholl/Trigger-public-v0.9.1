@@ -1,4 +1,17 @@
+<p align="center">
+  <img src="docs/banner.png" alt="trigger — панель триггерных SMS-коммуникаций" width="820">
+</p>
+
 # Trigger — панель триггерных SMS-коммуникаций
+
+<p align="center">
+  <img src="https://img.shields.io/badge/version-v0.9.1-10b981?style=flat-square" alt="версия v0.9.1">
+  <img src="https://img.shields.io/badge/license-MIT-34d399?style=flat-square" alt="лицензия MIT">
+  <img src="https://img.shields.io/badge/Next.js-16-0f172a?style=flat-square" alt="Next.js 16">
+  <img src="https://img.shields.io/badge/TypeScript-strict-334155?style=flat-square" alt="TypeScript strict">
+  <img src="https://img.shields.io/badge/Prisma-SQLite-0d9488?style=flat-square" alt="Prisma + SQLite">
+  <img src="https://img.shields.io/badge/Bun-runtime-f59e0b?style=flat-square" alt="Bun">
+</p>
 
 Open-source-система автоматизированных SMS-коммуникаций (Next.js + SQLite):
 по входящему событию (просрочка, приближение платежа, поступление платежа,
@@ -12,6 +25,33 @@ Open-source-система автоматизированных SMS-коммун
 > ⚠️ **В репозитории и демо-данных — только синтетика.** Реальные ФИО,
 > телефоны и данные клиентов запрещены (152-ФЗ): проверяйте, что вы
 > заливаете в тестовую базу.
+
+## Скриншоты
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="docs/dashboard.png"><img src="docs/dashboard.png" alt="Дашборд"></a>
+      <p align="center"><b>Дашборд</b> — метрики, динамика, последние события</p>
+    </td>
+    <td width="50%" valign="top">
+      <a href="docs/funnels.png"><img src="docs/funnels.png" alt="Воронки"></a>
+      <p align="center"><b>Воронки</b> — цепочки SMS с задержками и ветвлениями</p>
+    </td>
+  </tr>
+  <tr>
+    <td valign="top">
+      <a href="docs/clients.png"><img src="docs/clients.png" alt="Клиенты"></a>
+      <p align="center"><b>Клиенты</b> — карточка, события, счётчики</p>
+    </td>
+    <td valign="top">
+      <a href="docs/broadcasts.png"><img src="docs/broadcasts.png" alt="Рассылки"></a>
+      <p align="center"><b>Рассылки</b> — кампании по сегментам с прогрессом</p>
+    </td>
+  </tr>
+</table>
+
+Скриншоты сняты на синтетических демо-данных (`bun run db:seed`).
 
 ## Возможности
 
