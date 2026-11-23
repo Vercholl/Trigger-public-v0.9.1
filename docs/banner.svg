@@ -25,7 +25,7 @@
     <text x="138" y="118" font-size="88" font-weight="800" letter-spacing="1" fill="#f8fafc">trigger</text>
 
     <text x="140" y="158" font-size="27" fill="#94a3b8">Панель триггерных SMS-коммуникаций</text>
-    <text x="140" y="190" font-size="17" fill="#64748b">события клиентов → воронки и сценарии → доставляемость и комплаенс 152-ФЗ</text>
+    <text x="140" y="190" font-size="17" fill="#cbd5e1">события клиентов → воронки и сценарии → доставляемость и комплаенс 152-ФЗ</text>
 
     <g fill="#f8fafc" fill-opacity="0.05" stroke="#475569" stroke-opacity="0.45">
       <rect x="140" y="222" width="104" height="32" rx="16"/>
@@ -41,22 +41,22 @@
     </g>
 
     <g fill="#020617" stroke="#334155">
-      <rect x="806" y="84" width="104" height="30" rx="15"/>
-      <rect x="956" y="84" width="104" height="30" rx="15"/>
-      <rect x="1106" y="84" width="74" height="30" rx="15"/>
+      <rect x="766" y="84" width="104" height="30" rx="15"/>
+      <rect x="916" y="84" width="104" height="30" rx="15"/>
+      <rect x="1066" y="84" width="74" height="30" rx="15"/>
     </g>
     <g font-size="14" fill="#cbd5e1" text-anchor="middle">
-      <text x="858" y="104">событие</text>
-      <text x="1008" y="104">воронка</text>
-      <text x="1143" y="104">SMS</text>
+      <text x="818" y="104">событие</text>
+      <text x="968" y="104">воронка</text>
+      <text x="1103" y="104">SMS</text>
     </g>
     <g stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none">
-      <line x1="918" y1="99" x2="936" y2="99"/>
-      <polyline points="936,93 946,99 936,105"/>
-      <line x1="1068" y1="99" x2="1086" y2="99"/>
-      <polyline points="1086,93 1096,99 1086,105"/>
+      <line x1="878" y1="99" x2="898" y2="99"/>
+      <polyline points="898,93 908,99 898,105"/>
+      <line x1="1028" y1="99" x2="1048" y2="99"/>
+      <polyline points="1048,93 1058,99 1048,105"/>
     </g>
 
-    <text x="1160" y="270" font-size="15" fill="#64748b" text-anchor="end">v0.9.1 · open source · MIT</text>
+    <text x="1140" y="270" font-size="15" fill="#cbd5e1" text-anchor="end">v0.9.1 · open source · MIT</text>
   </g>
 </svg>
