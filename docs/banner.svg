@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" width="1200" height="300" role="img" aria-label="trigger — панель триггерных SMS-коммуникаций">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0f172a"/>
+      <stop offset="1" stop-color="#1e293b"/>
+    </linearGradient>
+    <linearGradient id="acc" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#10b981"/>
+      <stop offset="1" stop-color="#34d399"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="300" rx="16" fill="url(#bg)"/>
+  <circle cx="1046" cy="48" r="150" fill="#10b981" opacity="0.06"/>
+  <circle cx="1150" cy="256" r="100" fill="#34d399" opacity="0.05"/>
+  <circle cx="620" cy="312" r="130" fill="#10b981" opacity="0.04"/>
+
+  <g font-family="ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+
+    <rect x="60" y="48" width="58" height="46" rx="13" fill="url(#acc)"/>
+    <path d="M86 94 l-9 16 l25 -16 z" fill="url(#acc)"/>
+    <rect x="74" y="61" width="32" height="6" rx="3" fill="#052e2b" opacity="0.75"/>
+    <rect x="74" y="73" width="19" height="6" rx="3" fill="#052e2b" opacity="0.75"/>
+
+    <text x="138" y="118" font-size="88" font-weight="800" letter-spacing="1" fill="#f8fafc">trigger</text>
+
+    <text x="140" y="158" font-size="27" fill="#94a3b8">Панель триггерных SMS-коммуникаций</text>
+    <text x="140" y="190" font-size="17" fill="#64748b">события клиентов → воронки и сценарии → доставляемость и комплаенс 152-ФЗ</text>
+
+    <g fill="#f8fafc" fill-opacity="0.05" stroke="#475569" stroke-opacity="0.45">
+      <rect x="140" y="222" width="104" height="32" rx="16"/>
+      <rect x="256" y="222" width="104" height="32" rx="16"/>
+      <rect x="368" y="222" width="142" height="32" rx="16"/>
+      <rect x="522" y="222" width="62" height="32" rx="16"/>
+    </g>
+    <g font-size="15" fill="#cbd5e1" text-anchor="middle">
+      <text x="192" y="243">Next.js 16</text>
+      <text x="308" y="243">TypeScript</text>
+      <text x="439" y="243">Prisma + SQLite</text>
+      <text x="553" y="243">Bun</text>
+    </g>
+
+    <g fill="#020617" stroke="#334155">
+      <rect x="806" y="84" width="104" height="30" rx="15"/>
+      <rect x="956" y="84" width="104" height="30" rx="15"/>
+      <rect x="1106" y="84" width="74" height="30" rx="15"/>
+    </g>
+    <g font-size="14" fill="#cbd5e1" text-anchor="middle">
+      <text x="858" y="104">событие</text>
+      <text x="1008" y="104">воронка</text>
+      <text x="1143" y="104">SMS</text>
+    </g>
+    <g stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none">
+      <line x1="918" y1="99" x2="936" y2="99"/>
+      <polyline points="936,93 946,99 936,105"/>
+      <line x1="1068" y1="99" x2="1086" y2="99"/>
+      <polyline points="1086,93 1096,99 1086,105"/>
+    </g>
+
+    <text x="1160" y="270" font-size="15" fill="#64748b" text-anchor="end">v0.9.1 · open source · MIT</text>
+  </g>
+</svg>
